@@ -6,6 +6,81 @@
 
 ---
 
+## This fork: baseline nanoGPT vs. a modernized architecture
+
+A controlled comparison between the original nanoGPT architecture and the modernized
+one from [@KellerJordan](https://github.com/KellerJordan)'s
+[modded-nanogpt](https://github.com/KellerJordan/modded-nanogpt), trained on 300M
+tokens of FineWeb-Edu on a single 12GB RTX 4080 Laptop GPU.
+
+`model.py` and `train.py` are unmodified upstream — the baseline is the stock
+implementation. The modernized model lives in `model_modded.py`, with every component
+behind a flag so they can be ablated individually.
+
+### Architectural changes
+
+| | baseline nanoGPT | modded architecture |
+|---|---|---|
+| Normalization | LayerNorm (learnable gain + optional bias) | **RMSNorm, parameter-free** |
+| Position encoding | learned absolute embedding table | **RoPE** (computed, relative) |
+| MLP activation | GELU | **ReLU²** (not SwiGLU) |
+| QK-norm | — | **RMSNorm on Q and K** |
+| Biases | optional | **none anywhere** |
+| Input / output embeddings | **tied** (one shared matrix) | **untied** (two matrices) |
+| Value embeddings | — | **3 tables** mixed into attention's V |
+| Bigram features | — | **65,536-bucket hash** of (prev, current) token |
+| Skip connections | residual only | **+ U-net skips + embedding skip** |
+| Output logits | raw | **softcapped** `30·tanh(x/30)` |
+| Init | normal(0, 0.02), scaled residual | **zero-init** projections and LM head |
+| Optimizer | AdamW on everything | **Muon** (hidden matrices) + **AdamW** (embeddings, head, scalars) |
+| LR schedule | cosine decay | **WSD** (warmup → stable → linear cooldown) |
+| Gradient clipping | 1.0 | disabled (orthogonalized updates are norm-bounded) |
+| Params (total / non-embedding) | 51.5M / 25.2M | 162.3M / **25.2M** |
+
+**Not ported**, being 8xH100 systems work that doesn't transfer to a single laptop
+GPU: FP8 matmuls and custom CUDA kernels, FlexAttention sliding windows with YaRN
+warmup, distributed Muon, and the later MUDD / hyperconnection / XSA records. The
+bigram hash embedding is reconstructed from modded-nanogpt's README description
+rather than ported verbatim.
+
+### Results
+
+Both architectures trained on identical data with an identical token budget, each at
+its own swept-optimal learning rate (baseline AdamW 6e-4; modded Muon 0.005).
+
+| Metric | baseline | modded | Δ |
+|---|---|---|---|
+| **val loss @ 300M tokens** | 3.8810 | **3.6583** | **−0.2227** |
+| **val loss @ equal wall-clock** (56.5 min) | 3.8810 | **3.7393** | **−0.1417** |
+| tokens to reach baseline's final loss | 300M | **~170M** | **−43%** |
+| wall-clock | 56.5 min | 71.3 min | +26% |
+| throughput | 89k tok/s | 71k tok/s | −20% |
+| MFU | 67.1% | 30.2% | −55% |
+| peak VRAM | 2.87 GB | 5.04 GB | +76% |
+
+![benchmark](assets/comparison.png)
+
+The modernized architecture wins at equal tokens *and* at equal wall-clock, while
+running at less than half the baseline's hardware efficiency. Repeating a run with a
+different seed moves val loss by only 0.007–0.009, so both margins are 14–22x the
+measurement noise.
+
+Two caveats worth keeping attached to these numbers. Non-embedding (compute)
+parameters are matched exactly at 25.2M, but modded carries 162M total because it
+unties embeddings and adds three full-vocabulary value-embedding tables — this is not
+a like-for-like size comparison. And neither run uses document-level attention
+masking, so both are slightly handicapped versus a full implementation.
+
+### Credits
+
+- [@karpathy](https://github.com/karpathy) for nanoGPT
+- [@KellerJordan](https://github.com/KellerJordan) for
+  [modded-nanogpt](https://github.com/KellerJordan/modded-nanogpt) and
+  [Muon](https://github.com/KellerJordan/Muon) — every architectural change and the
+  optimizer benchmarked here originate there
+
+---
+
 **Update Nov 2025** nanoGPT has a new and improved cousin called [nanochat](https://github.com/karpathy/nanochat). It is very likely you meant to use/find nanochat instead. nanoGPT (this repo) is now very old and deprecated but I will leave it up for posterity.
 
 ---

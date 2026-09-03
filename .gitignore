@@ -10,3 +10,10 @@ __pycache__/
 input.txt
 env/
 venv/
+wandb/
+bench/
+# one-off local drivers, not part of the published benchmark
+sweep.sh
+sweep2.sh
+score.sh
+sync_wandb.py
